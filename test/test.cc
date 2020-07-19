@@ -8,12 +8,14 @@ using namespace std;
 
 int main()
 {
-    std::string str = "1234";
-    std::stringstream ss(str);
-    int len = 0;
-    ss >> len;
+    std::stringstream ss;
+    int len = 1234;
+    ss << len;
+    std::string str = ss.str();
 
-    cout << len  << endl;
+    cout << str <<endl;
+
+
 //    string str = "Content-Length: 30";
 //    std::size_t pos = str.find(": ");
 //    if(std::string::npos == pos){

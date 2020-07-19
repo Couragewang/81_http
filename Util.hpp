@@ -24,6 +24,30 @@ class Util{
             ss >> len;
             return len;
         }
+
+        static std::string IntToString(int num){
+            std::stringstream ss;
+            ss << num;
+            return ss.str();
+        }
+        
+        static std::string SuffixToType(std::string suffix){
+            if(suffix == ".html" || suffix == "htm"){
+                return "text/html";
+            }
+            else if(suffix == ".js"){
+                return "application/x-javascript";
+            }
+            else if(suffix == ".css"){
+                return "text/css";
+            }
+            else if(suffix == ".jpg"){
+                return "application/x-jpg";
+            }
+            else{
+                return "text/html";
+            }
+        }
 };
 
 
