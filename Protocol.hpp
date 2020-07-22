@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
@@ -53,9 +55,18 @@ class HttpRequest{
             //if method == POST
             path += url;
         }
+        std::string GetQueryString(){
+            return query_string;
+        }
+        std::string GetRequestBody(){
+            return request_body;
+        }
         int GetFileSize(){
             std::cout << "GetFileSize: " << file_size << std::endl;
             return file_size;
+        }
+        std::string GetPath(){
+            return path;
         }
         //GET /index.html HTTP/1.0\n 
         void RequestLineParse()
@@ -217,6 +228,12 @@ class HttpResponse{
         void SetResponseLine(std::string &line){
             response_line = line;
         }
+        void SetResponseText(std::string &text){
+            response_text = text;
+        }
+        std::string GetResponseText(){
+            return response_text;
+        }
         void AddResponseHeader(std::string &line){
             if(response_header.empty()){
                 response_header = line;
@@ -314,8 +331,13 @@ class Connect{
             line += rsp->GetResponseHeader();
             line += rsp->GetBlank();
             send(sock, line.c_str(), line.size(), 0);
-
-            sendfile(sock, rq->GetFd(), nullptr, rq->GetFileSize());
+            if(rq->IsCgi()){
+                std::string text = rsp->GetResponseText();
+                send(sock, text.c_str(), text.size(), 0);
+            }
+            else{
+                sendfile(sock, rq->GetFd(), nullptr, rq->GetFileSize());
+            }
         }
 
         ~Connect()
@@ -329,18 +351,23 @@ class Connect{
 
 class Entry{
     public:
-        static void MakeReqponse(HttpRequest *rq, HttpResponse *rsp){
+        static void MakeReqponse(HttpRequest *rq, HttpResponse *rsp, int code){
+            std::string line = Util::GetStatusLine(code);
+            rsp->SetResponseLine(line);
+            line = "Content-Type: ";
+            line += Util::SuffixToType(rq->GetSuffix());
+            line += "\r\n";
+            rsp->AddResponseHeader(line);
+            line = "Content-Length: ";
+
             if(rq->IsCgi()){
                 //TODO
-            }
-            else{
-                std::string line = "HTTP/1.0 200 OK\r\n";
-                rsp->SetResponseLine(line);
-                line = "Content-Type: ";
-                line += Util::SuffixToType(rq->GetSuffix());
+                std::string text = rsp->GetResponseText();
+                line += Util::IntToString(text.size());
                 line += "\r\n";
                 rsp->AddResponseHeader(line);
-                line = "Content-Length: ";
+            }
+            else{
                 line += Util::IntToString(rq->GetFileSize());
                 line += "\r\n";
                 rsp->AddResponseHeader(line);
@@ -350,17 +377,23 @@ class Entry{
         static void ProcessNormal(Connect *conn, HttpRequest *rq, HttpResponse *rsp)
         {
             //没有cgi，没有query_string, 不是POST， path
-            MakeReqponse(rq, rsp);
-            conn->SendResponse(rq, rsp);
             //fopen -> 
         }
         static int ProcessCGI(Connect *conn, HttpRequest *rq, HttpResponse *rsp){
+
+            std::string content_length;
             //站在子进程的角度
             int read_pipe[2];
             int write_pipe[2];
             pipe(read_pipe);
-            pipe(write_pipe); 
+            pipe(write_pipe);
 
+            std::string args;
+            if(rq->IsGet()){
+                args = rq->GetQueryString();
+            }else{
+                args = rq->GetRequestBody();
+            }
             pid_t id = fork();
             if(id < 0){
                 LOG(Error, "fork error");
@@ -369,12 +402,53 @@ class Entry{
                 //child
                 close(read_pipe[1]);
                 close(write_pipe[0]);
+
+                dup2(read_pipe[0], 0);
+                dup2(write_pipe[1], 1);
+
+                content_length = "Content-Length=";
+                content_length += Util::IntToString(args.size());
+
+                putenv((char*)content_length.c_str());
+
+                //read_pipe[0]
+                std::string path = rq->GetPath();
+                //read() or write()
+                //增加约定，利用重定向技术，来完成文件描述符的约定
+                //通过0文件描述符读取，往1文件描述符打印
+                //0->read_pipe[0]
+                //1->write_pipe[1]
+                execl(path.c_str(), path.c_str(), nullptr); //read->0, getenv("Content-Length")
+
+                //rq->path 这个是我们要让子进程执行的程序
+                //rq->query_string(GET) or rq->body(POST)
+                exit(1);
             }
             else{
                 //fahter
                 close(read_pipe[0]);
                 close(write_pipe[1]);
+
+                //TODO
+                for(auto i = 0; i < args.size(); i++){
+                    write(read_pipe[1], &args[i], 1);
+                }
+                char c;
+                std::string body;
+                while(read(write_pipe[0], &c, 1) > 0){
+                    body.push_back(c);
+                }
+                rsp->SetResponseText(body);
+                //将body设置进response->body
+                pid_t ret = waitpid(id, nullptr, 0);
+                if(ret < 0){
+                    LOG(Warning, "waitpid child failed!");
+                    return 404;
+                }
             }
+            return 200;
+            //makeresponse
+            //send
         }
         static void *HandlerRequest(void *args){
             int *p = (int*)args;
@@ -424,14 +498,14 @@ class Entry{
             if(rq->IsCgi()){
                 //CGI
                 LOG(Normal, "exec by cgi!");
-                ProcessCGI(conn, rq, rsp);
-            }
-            else{
-                //non cgi
+                code = ProcessCGI(conn, rq, rsp);
+            }else{
                 LOG(Normal, "exec by non cgi!");
-                ProcessNormal(conn, rq, rsp);
             }
 
+end:
+            MakeReqponse(rq, rsp, code);
+            conn->SendResponse(rq, rsp);
 //          rq->Show();
 
             //recv request
@@ -439,7 +513,6 @@ class Entry{
             //make response
             //send response
 
-end:
             delete conn;
             delete rq;
             delete rsp;

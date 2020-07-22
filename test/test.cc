@@ -1,4 +1,5 @@
 #include <iostream>
+#include <unistd.h>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -8,14 +9,13 @@ using namespace std;
 
 int main()
 {
-    std::stringstream ss;
-    int len = 1234;
-    ss << len;
-    std::string str = ss.str();
+    execl("/bin/ls", "/bin/ls",nullptr);
 
-    cout << str <<endl;
-
-
+//    std::stringstream ss;
+//    int len = 1234;
+//    ss << len;
+//    std::string str = ss.str();
+//    cout << str <<endl;
 //    string str = "Content-Length: 30";
 //    std::size_t pos = str.find(": ");
 //    if(std::string::npos == pos){

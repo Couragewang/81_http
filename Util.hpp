@@ -48,6 +48,17 @@ class Util{
                 return "text/html";
             }
         }
+        static std::string GetStatusLine(int code)
+        {
+            switch(code){
+                case 200:
+                    return "HTTP/1.0 200 OK\r\n";
+                case 404:
+                    return "HTTP/1.0 404 Not Found\r\n";
+                default:
+                    return "HTTP/1.0 200 OK\r\n";
+            }
+        }
 };
 
 
