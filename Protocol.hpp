@@ -6,6 +6,7 @@
 #include <string>
 #include <strings.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -18,6 +19,7 @@
 
 #define WWWROOT "./wwwroot"
 #define WELCOME_PAGE "index.html"
+#define PAGE_404 "./wwwroot/404.html"
 
 class HttpRequest{
     private:
@@ -67,6 +69,14 @@ class HttpRequest{
         }
         std::string GetPath(){
             return path;
+        }
+        void SetPath(std::string _path){
+            path = _path;
+            struct stat st;
+            stat(path.c_str(), &st);
+            file_size = st.st_size;
+            cgi = false;
+            suffix = ".html";
         }
         //GET /index.html HTTP/1.0\n 
         void RequestLineParse()
@@ -257,9 +267,10 @@ class Connect{
         //3. \n
         //   \r&\n&\r\n -> \n
         //4. read one char
-        int RecvLine(std::string &line)
+        bool RecvLine(std::string &line)
         {
             char c = 'X';
+            int result = true;
             while(c != '\n'){
                 ssize_t s = recv(sock, &c, 1, 0);
                 if(s > 0){
@@ -277,36 +288,46 @@ class Connect{
                 }
                 else{
                     LOG(Warning, "recv request error!");
+                    result = false;
                     break;
                 }
             }
-            return line.size();
+            return result;
         }
-        void RecvHttpRequestLine(std::string &request_line)
+        bool RecvHttpRequestLine(std::string &request_line)
         {
-            RecvLine(request_line);
+            return RecvLine(request_line);
         }
-        void RecvHttpRequestHeader(std::string &request_header)
+        bool RecvHttpRequestHeader(std::string &request_header)
         {
             std::string line = "";
+            bool result = true;
             do{
                 line = "";
-                RecvLine(line);
-                if(line != "\n"){
-                    request_header += line;
+                if(RecvLine(line)){
+                    if(line != "\n"){
+                        request_header += line;
+                    }
+                }
+                else{
+                    result = false;
+                    break;
                 }
             }while(line != "\n");
+
+            return result;
         }
         //读取http请求的请求行，请求报头，包括空行
-        void RecvHttpRequest(HttpRequest *rq)
+        int RecvHttpRequest(HttpRequest *rq)
         {
             std::string request_line;
             std::string request_header;
-            RecvHttpRequestLine(request_line);
-            RecvHttpRequestHeader(request_header);
-
-            rq->SetRequestLine(request_line);
-            rq->SetRequestHeader(request_header);
+            if(RecvHttpRequestLine(request_line) && RecvHttpRequestHeader(request_header)){
+                rq->SetRequestHeader(request_header);
+                rq->SetRequestLine(request_line);
+                return 200;
+            }
+            return 404;
         }
         //读取http请求的请求正文，放进rq->
         void RecvHttpBody(HttpRequest *rq)
@@ -353,7 +374,11 @@ class Entry{
     public:
         static void MakeReqponse(HttpRequest *rq, HttpResponse *rsp, int code){
             std::string line = Util::GetStatusLine(code);
+            if(code == 404){
+                rq->SetPath(PAGE_404); //for debug
+            }
             rsp->SetResponseLine(line);
+            //Location:
             line = "Content-Type: ";
             line += Util::SuffixToType(rq->GetSuffix());
             line += "\r\n";
@@ -451,20 +476,23 @@ class Entry{
             //send
         }
         static void *HandlerRequest(void *args){
-            int *p = (int*)args;
-            int sock = *p;
-            delete p;
+            int sock = *(int*)args;
 
             int code = 200;
             Connect *conn = new Connect(sock);
             HttpRequest *rq = new HttpRequest();
             HttpResponse *rsp = new HttpResponse();
 
-            conn->RecvHttpRequest(rq);
-            rq->RequestLineParse();
-            //request header -> map
-            rq->RequestHeaderParse();
-
+            code = conn->RecvHttpRequest(rq);
+            if(code == 200){
+                rq->RequestLineParse();
+                //request header -> map
+                rq->RequestHeaderParse();
+            }
+            else{
+                LOG(Warning, "recv http Request error!");
+                goto end;
+            }
             //Method is Ok? GET, POST
             if(!rq->IsMethodOk()){
                 code = 404;
